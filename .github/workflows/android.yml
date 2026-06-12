@@ -17,6 +17,12 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
 
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        android-api-level: 34
+        build-tools: 34.0.0
+
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
