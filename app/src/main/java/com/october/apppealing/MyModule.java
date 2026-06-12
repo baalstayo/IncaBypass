@@ -1,5 +1,7 @@
 package com.october.apppealing;
 
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.util.Log;
 
@@ -12,6 +14,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import java.io.File;
 import java.lang.reflect.Method;
+import java.util.Iterator;
+import java.util.List;
 
 public class MyModule implements IXposedHookLoadPackage {
 
@@ -28,10 +32,41 @@ public class MyModule implements IXposedHookLoadPackage {
         ClassLoader cl = lpparam.classLoader;
 
         // =============================================
-        // 1. BLOCK ALL FRIDA DETECTION VECTORS
+        // 1. TOTAL MASK XPOSED (ini kunci!)
         // =============================================
 
-        // Block Frida-related file checks
+        // Sembunyikan Xposed dari deteksi
+        XposedHelpers.findAndHookMethod("de.robv.android.xposed.XposedBridge", cl, "isXposedLoaded", new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                param.setResult(false);
+            }
+        });
+
+        // Sembunyikan Xposed module dari daftar package
+        try {
+            Class<?> pmClass = Class.forName("android.content.pm.PackageManager", false, cl);
+            XposedHelpers.findAndHookMethod(pmClass, "getInstalledPackages", int.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    List<PackageInfo> packages = (List<PackageInfo>) param.getResult();
+                    Iterator<PackageInfo> it = packages.iterator();
+                    while (it.hasNext()) {
+                        PackageInfo pkg = it.next();
+                        if (pkg.packageName.equals("de.robv.android.xposed.installer") ||
+                            pkg.packageName.equals("com.october.apppealing")) {
+                            it.remove();
+                        }
+                    }
+                }
+            });
+        } catch (Throwable ignored) {}
+
+        // =============================================
+        // 2. BLOCK ALL DETECTION VECTORS (lebih komprehensif)
+        // =============================================
+
+        // Block file checks
         XposedHelpers.findAndHookMethod(File.class, "exists", new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
@@ -40,13 +75,16 @@ public class MyModule implements IXposedHookLoadPackage {
                     path.contains("frida") || path.contains("xposed") || path.contains("re.frida") ||
                     path.contains("libfrida") || path.contains("frida-server") || path.contains("gadget") ||
                     path.contains("/proc/self/maps") || path.contains("/dev/ashmem") ||
-                    path.contains("/data/local/tmp/frida") || path.contains("/system/bin/frida")) {
+                    path.contains("/data/local/tmp/frida") || path.contains("/system/bin/frida") ||
+                    path.contains("/xposed") || path.contains("/data/app/") ||
+                    path.contains("/data/data/") || path.contains("/cache/") ||
+                    path.contains("/sdcard/")) {
                     param.setResult(false);
                 }
             }
         });
 
-        // Block Frida-related command execution
+        // Block command execution
         XC_MethodHook execHook = new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
@@ -56,7 +94,8 @@ public class MyModule implements IXposedHookLoadPackage {
                 if (cmd.contains("su") || cmd.contains("magisk") || cmd.contains("which su") ||
                     cmd.contains("frida") || cmd.contains("xposed") || cmd.contains("ps -ef") ||
                     cmd.contains("cat /proc/self/maps") || cmd.contains("grep frida") ||
-                    cmd.contains("ls -la /data/local/tmp") || cmd.contains("ls -la /dev/ashmem")) {
+                    cmd.contains("ls -la /data/local/tmp") || cmd.contains("ls -la /dev/ashmem") ||
+                    cmd.contains("getprop") || cmd.contains("dumpsys") || cmd.contains("adb")) {
                     param.setResult(null);
                 }
             }
@@ -68,25 +107,11 @@ public class MyModule implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(Runtime.class, "exec", String[].class, execHook);
         } catch (Throwable ignored) {}
 
-        // Block Frida-related network checks
-        try {
-            Class<?> inetAddress = Class.forName("java.net.InetAddress", false, cl);
-            XposedHelpers.findAndHookMethod(inetAddress, "getByName", String.class, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    String host = (String) param.args[0];
-                    if (host.contains("frida") || host.contains("xposed") || host.contains("localhost")) {
-                        param.setResult(null);
-                    }
-                }
-            });
-        } catch (Throwable ignored) {}
-
         // =============================================
-        // 2. HOOK INCA APPGUARD IN BOTH PROCESSES
+        // 3. HOOK INCA APPGUARD DI SEMUA PROSES
         // =============================================
 
-        // Hook INCA AppGuard classes in main process AND service process
+        // Hook semua kelas INCA di semua proses
         String[] engineClasses = {
             "com.inca.security.Cire.AppGuardEngine",
             "com.inca.security.AppGuard",
@@ -107,38 +132,9 @@ public class MyModule implements IXposedHookLoadPackage {
         }
 
         // =============================================
-        // 3. HIDE XPOSED FROM INCA DETECTION
+        // 4. FORCED "SAFE" RESPONSES
         // =============================================
 
-        // Block Xposed detection
-        try {
-            XposedHelpers.findAndHookMethod("de.robv.android.xposed.XposedBridge", cl, "isXposedLoaded", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    param.setResult(false);
-                }
-            });
-        } catch (Throwable ignored) {}
-
-        // Block Xposed API checks
-        try {
-            XposedHelpers.findAndHookMethod("de.robv.android.xposed.XposedHelpers", cl, "findMethodExact",
-                String.class, ClassLoader.class, String.class, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    String className = (String) param.args[0];
-                    if (className.contains("xposed")) {
-                        param.setResult(null);
-                    }
-                }
-            });
-        } catch (Throwable ignored) {}
-
-        // =============================================
-        // 4. FORCE "SAFE" RESPONSES FOR ALL DETECTION CHECKS
-        // =============================================
-
-        // Block all detection methods (root, debug, frida, xposed)
         XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, boolean.class, new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
@@ -165,7 +161,7 @@ public class MyModule implements IXposedHookLoadPackage {
                 String name = method.getName().toLowerCase();
                 Class<?> retType = method.getReturnType();
 
-                // Hook boolean methods (detection checks)
+                // Hook boolean methods
                 if (retType == boolean.class) {
                     boolean returnVal = false;
                     if (name.contains("safe") || name.contains("valid") || name.contains("allow") ||
@@ -176,7 +172,7 @@ public class MyModule implements IXposedHookLoadPackage {
                     hooked++;
                 }
 
-                // Hook int methods (error codes)
+                // Hook int methods
                 if (retType == int.class || retType == Integer.class) {
                     if (name.contains("status") || name.contains("code") || name.contains("result")) {
                         XposedBridge.hookMethod(method, XC_MethodReplacement.returnConstant(0));
@@ -184,7 +180,7 @@ public class MyModule implements IXposedHookLoadPackage {
                     }
                 }
 
-                // Hook void methods (detection callbacks)
+                // Hook void methods
                 if (retType == void.class) {
                     if (name.contains("detect") || name.contains("violation") || 
                         name.contains("crash") || name.contains("exit")) {
